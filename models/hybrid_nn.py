@@ -38,7 +38,11 @@ class HybridBinaryModel(nn.Module):
         self.qlayer = QuantumLayer(num_qubits=num_qubits, num_qlayers=num_qlayers, qcircuit=qcircuit)
 
         # Classification layer (for binary classification, we can use a single output with sigmoid)
-        self.fc_final = nn.Linear(num_qubits, 1)  # Output a single value for binary classification
+        self.fc_final = nn.Sequential(
+            nn.Linear(num_qubits, 32),  
+            nn.ReLU(),
+            nn.Linear(32, 1)  # Output a single value for binary classification
+        )
         
     def forward(self, x):
         if isinstance(x, np.ndarray):
