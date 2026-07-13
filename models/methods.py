@@ -1,22 +1,27 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import seaborn as sns
 from torch.optim import Optimizer
-from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
 from tqdm import tqdm
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, accuracy_score
+from IPython.display import clear_output
+from utils import plot_decision_boundary, plot_training_curves
 
 
 def training(model: nn.Module,
-            train_loader: DataLoader,
-            criterion: nn.Module,
-            optimizer: Optimizer,
-            device: torch.device,
-            epochs: int,
-            val_loader: DataLoader=None,
-            use_amp: bool=True):
+             X,
+             y,
+             criterion: nn.Module,
+             optimizer: Optimizer,
+             device: torch.device,
+             epochs: int,
+             use_amp: bool=True,
+             visualize: bool=False,
+             refresh_rate: int=5,
+             save_path: str='./models/progress_steps'):
     """
     Train a PyTorch model with optional Automatic Mixed Precision.
 
@@ -24,8 +29,10 @@ def training(model: nn.Module,
     ----------
     model : nn.Module
         The neural network model to be trained.
-    train_loader : DataLoader
-        DataLoader providing the training dataset.
+    X : torch.Tensor
+        Input features for training.
+    y : torch.Tensor
+        Target labels for training.
     criterion : nn.Module
         Loss function used to compute training loss.
     optimizer : torch.optim.Optimizer
@@ -34,9 +41,8 @@ def training(model: nn.Module,
         Device on which to train the model ('cpu' or 'cuda').
     epochs : int
         Number of training epochs.
-    val_loader : DataLoader, optional
-        DataLoader providing the validation dataset.
-        If None, no validation is performed. Default is None.
+    visualize : bool, optional
+        Whether to visualize the training process. Default is False.
     use_amp : bool, optional
         Whether to use AMP.
         AMP is enabled only when using a CUDA device. Default is True.
@@ -47,74 +53,57 @@ def training(model: nn.Module,
         Average training loss for each epoch.
     train_accuracies : list of float
         Training accuracy (percentage) for each epoch.
-    val_losses : list of float
-        Validation loss for each epoch.
-        Empty if val_loader is None.
-    val_accuracies : list of float
-        Validation accuracy (percentage) for each epoch.
-        Empty if val_loader is None.
     """
 
     model.to(device)
+    X, y = X.to(device), y.to(device)
+
     use_amp = use_amp and device.type == "cuda"
     scaler = GradScaler(enabled=use_amp)
 
-    train_losses, train_accuracies = [], []
-    val_losses, val_accuracies = [], []
+    loss_history, acc_history = [], []
+
+    if visualize:
+        # Préparation de la grille pour la frontière de décision (calculée une seule fois)
+        x_min, x_max = X[:, 0].min() - 0.5, X[:, 0].max() + 0.5
+        y_min, y_max = X[:, 1].min() - 0.5, X[:, 1].max() + 0.5
+        xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
+                            np.arange(y_min, y_max, 0.1))
+        grid_tensor = torch.from_numpy(np.c_[xx.ravel(), yy.ravel()]).float()
 
     epoch_tqdm = tqdm(range(epochs), desc="Training Progress")
 
     for epoch in epoch_tqdm:
         model.train()
-        running_loss = 0.0
 
-        loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False)
+        optimizer.zero_grad(set_to_none=True)
 
-        for imgs, labels in loop:
-            imgs, labels = imgs.to(device), labels.to(device)
+        with autocast(device_type=device.type, enabled=use_amp):
+            outputs = model(X)
+            y = y.view_as(outputs)  # Ensure y has the same shape as outputs
+            loss = criterion(outputs, y)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        with torch.no_grad():
+            pred_labels = (outputs > 0.5).float()
+            acc = accuracy_score(y.numpy(), pred_labels.numpy())
             
-            optimizer.zero_grad(set_to_none=True)
+            loss_history.append(loss.item())
+            acc_history.append(acc)
 
-            with autocast(device_type=device.type, enabled=use_amp):
-                outputs = model(imgs)
-                loss = criterion(outputs, labels)
+        epoch_loss = sum(loss_history) / len(loss_history)
+        epoch_acc = sum(acc_history) / len(acc_history)
+        epoch_tqdm.set_postfix(train_loss=epoch_loss, train_acc=epoch_acc)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+        if visualize and ((epoch + 1) % refresh_rate == 0 or epoch == epochs - 1):
+            # clear_output(wait=True)  # Clear and update the plot
+            plot_decision_boundary(model, X, y, grid_tensor, xx, yy, save_path=f'{save_path}/decision_boundary_epoch_{epoch+1}.png')
+            plot_training_curves(loss_history, acc_history, save_path=f'{save_path}/training_curves_epoch_{epoch+1}.png')
 
-            running_loss += loss.item() * imgs.size(0)
-            predicted = torch.argmax(outputs, dim=1)
-            accuracy += (predicted == labels).sum().item()
-
-            loop.set_postfix(loss=loss.item())
-
-            del outputs, loss, imgs, labels
-
-        torch.cuda.empty_cache()
-
-        epoch_loss = running_loss / len(train_loader.dataset)
-        epoch_acc = 100.0 * accuracy / len(train_loader.dataset)
-
-        train_losses.append(epoch_loss)
-        train_accuracies.append(epoch_acc)
-
-        if val_loader is not None:
-            val_loss, val_accuracy = evaluating(
-                model, val_loader, criterion, device, use_amp
-            )
-            
-            val_losses.append(val_loss)
-            val_accuracies.append(val_accuracy)
-
-            epoch_tqdm.set_postfix(
-                train_loss=epoch_loss,
-                val_loss=val_loss,
-            )
-        else:
-            epoch_tqdm.set_postfix(train_loss=epoch_loss)
-
-    return train_losses, train_accuracies, val_losses, val_accuracies
+    return loss_history, acc_history
 
         
 def evaluating(model: nn.Module, 
