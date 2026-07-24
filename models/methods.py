@@ -21,7 +21,7 @@ def training(model: nn.Module,
              use_amp: bool=True,
              visualize: bool=False,
              refresh_rate: int=5,
-             save_path: str='./models/progress_steps'):
+             save_path: str='./figures/progress_steps'):
     """
     Train a PyTorch model with optional Automatic Mixed Precision.
 

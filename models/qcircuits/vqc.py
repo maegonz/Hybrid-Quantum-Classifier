@@ -11,6 +11,9 @@ def quantum_net(inputs, weights, n_qubits):
     n_qubits: nombre de qubits
     """
     n_layers = weights.shape[0]
+
+    for i in range(n_qubits):
+        qml.RY(inputs[i], wires=i)  # Encodage des données classiques dans les qubits
     
     for layer in range(n_layers):
         # Data Re-uploading : On encode les données en les combinant aux poids
